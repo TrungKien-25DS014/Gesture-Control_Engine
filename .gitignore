@@ -1,0 +1,7 @@
+myenv/
+myenv/
+# Bỏ qua các file tạm của Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd

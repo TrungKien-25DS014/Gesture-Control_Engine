@@ -1,0 +1,12 @@
+
+mediapipe==0.10.14
+attrs>=19.1.0
+protobuf>=4.25.3,<5
+opencv-contrib-python>=4.9
+numpy>=1.26,<3
+
+# UI / rendering (Giai đoạn A, E)
+PySide6>=6.5,<7
+
+# Dev / test
+pytest>=8.0
