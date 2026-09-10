@@ -29,6 +29,22 @@ class GestureType(Enum):
     """Giá trị thật được bổ sung khi hiện thực gesture_engine/."""
     UNKNOWN = auto()
 
+    # Giai đoạn C - trạng thái nắm/xòe (state_machine.py). Đây là trạng thái
+    # THƯỜNG TRỰC: mỗi frame của mỗi tay luôn được phân loại vào đúng 1
+    # trong 3 giá trị này, khác với các gesture rời rạc bên dưới.
+    HAND_CLOSED = auto()
+    HAND_OPENING = auto()
+    HAND_OPEN = auto()
+
+    # Giai đoạn C - gesture rời rạc (depth_gestures.py). Chỉ xuất hiện đúng
+    # frame xảy ra sự kiện (start/end hoặc vượt ngưỡng), không phải trạng
+    # thái thường trực như 3 giá trị ở trên.
+    PINCH_START = auto()
+    PINCH_END = auto()
+    ROTATE = auto()
+    PUSH = auto()
+    PULL = auto()
+
 
 @dataclass(frozen=True)
 class GestureEvent:
@@ -40,6 +56,16 @@ class GestureEvent:
     gesture_type: GestureType = GestureType.UNKNOWN
     confidence: float = 1.0
     raw_landmarks: Optional[tuple] = None   # giữ landmark gốc để debug/test
+    value: Optional[float] = None
+    """
+    Payload số phụ, ý nghĩa tùy theo gesture_type (Giai đoạn C):
+      - ROTATE      -> delta góc (radian, dấu +/-) so với frame trước.
+      - PUSH / PULL -> biên độ delta depth đo được trong cửa sổ trigger (luôn dương).
+      - Các gesture_type khác -> None, không dùng.
+    Đặt Optional thay vì bắt buộc vì phần lớn event (HAND_CLOSED/OPENING/
+    OPEN, PINCH_START/END) không cần payload số - ép buộc field cho mọi
+    loại event sẽ chỉ tạo giá trị rác không ý nghĩa.
+    """
 
     @property
     def position_3d(self) -> tuple[float, float, float]:

@@ -34,9 +34,24 @@ class VisionSource(Protocol):
 
 
 class GestureEngine(Protocol):
-    """gesture_engine/: nhận raw landmark, sinh GestureEvent có ý nghĩa (pinch/push/...)."""
+    """
+    gesture_engine/: nhận 1 GestureEvent "thô" (1 tay, 1 frame, gesture_type
+    UNKNOWN, mang raw_landmarks) từ vision/, sinh ra GestureEvent đã phân
+    loại (pinch/push/rotate/...).
 
-    def process(self, raw_event: GestureEvent) -> GestureEvent: ...
+    Cập nhật Giai đoạn C: process() ban đầu khai báo trả về 1 GestureEvent
+    duy nhất. Thực tế 1 frame của 1 tay có thể sinh nhiều phân loại cùng
+    lúc (vd: đang HAND_OPEN vừa lúc ROTATE, hoặc PINCH_START trùng frame
+    với PUSH) - không có state machine đơn nào gộp hết mà không mất thông
+    tin. Đổi sang `list[GestureEvent]` (0 hoặc nhiều phần tử: luôn có đúng
+    1 event trạng thái nắm/xòe + 0..n event rời rạc). Tiền lệ giống hệt
+    VisionSource.read_frame() đã đổi ở Giai đoạn B vì lý do tương tự - đây
+    là thay đổi hợp lệ trong phạm vi Protocol, không phá vỡ ranh giới giữa
+    các lớp (world/ vẫn chỉ biết đến GestureEvent, không biết gì về cách
+    gesture_engine/ tính toán ra chúng).
+    """
+
+    def process(self, raw_event: GestureEvent) -> list[GestureEvent]: ...
 
 
 class WorldLogic(Protocol):
