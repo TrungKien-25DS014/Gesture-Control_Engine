@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import pytest
 
+from core.touch_state import TouchState
 from core.world_anchor import WorldAnchor
 from rendering.projection import CameraConfig, project
 from rendering.scene import DEFAULT_COLOR, build_render_items
@@ -155,6 +156,39 @@ class TestBuildRenderItems:
         assert after.alpha < before.alpha
 
 
+    def test_glow_defaults_to_zero_without_glow_by_id(self) -> None:
+        camera = CameraConfig(screen_width=1000, screen_height=800)
+        anchor = WorldAnchor(position_3d=(0.5, 0.5, 0.3))
+
+        item = build_render_items([anchor], camera)[0]
+
+        assert item.glow == pytest.approx(0.0)
+
+    def test_glow_by_id_is_applied_to_matching_anchor_only(self) -> None:
+        camera = CameraConfig(screen_width=1000, screen_height=800)
+        glowing = WorldAnchor(id="glow-me", position_3d=(0.5, 0.5, 0.3))
+        plain = WorldAnchor(id="plain", position_3d=(0.2, 0.2, 0.3))
+
+        items = {
+            item.anchor_id: item
+            for item in build_render_items([glowing, plain], camera, glow_by_id={"glow-me": 0.8})
+        }
+
+        assert items["glow-me"].glow == pytest.approx(0.8)
+        assert items["plain"].glow == pytest.approx(0.0)
+
+    def test_yaw_defaults_to_zero_and_reflects_anchor_rotation(self) -> None:
+        camera = CameraConfig(screen_width=1000, screen_height=800)
+        still = WorldAnchor(position_3d=(0.5, 0.5, 0.3))
+        spinning = WorldAnchor(position_3d=(0.5, 0.5, 0.3), rotation=(0.0, 1.57, 0.0))
+
+        still_item = build_render_items([still], camera)[0]
+        spinning_item = build_render_items([spinning], camera)[0]
+
+        assert still_item.yaw == pytest.approx(0.0)
+        assert spinning_item.yaw == pytest.approx(1.57)
+
+
 # ---------------------------------------------------------------------------
 # rendering/overlay_window.py - smoke test tối thiểu cần Qt thật
 # ---------------------------------------------------------------------------
@@ -179,5 +213,30 @@ class TestOverlayWindowSmoke:
             ]
         )
         window.repaint()  # ép paintEvent() chạy ngay, không chờ event loop
+
+        window.close()
+
+    def test_render_with_touch_states_and_pulse_does_not_crash(self, qt_app) -> None:
+        """Giai đoạn F: touch_states (glow) và trigger_pulse() phải chạy
+        được qua nhiều lần paintEvent() liên tiếp (animator + dt thật) mà
+        không crash - đây là phần Qt thật không test bằng dữ liệu giả lập
+        thuần túy được (khác build_render_items() đã test riêng ở trên)."""
+        from rendering.overlay_window import OverlayWindow
+
+        camera = CameraConfig(screen_width=400, screen_height=300)
+        window = OverlayWindow(camera)
+        anchor = WorldAnchor(id="a1", position_3d=(0.5, 0.5, 0.2), metadata={"label": "A"})
+
+        window.render([anchor], {"a1": TouchState.TOUCHED})
+        window.repaint()
+
+        window.trigger_pulse("a1")
+        window.render([anchor], {"a1": TouchState.GRABBED})
+        window.repaint()
+
+        # Anchor biến mất khỏi world (bị remove_anchor) - animator phải dọn
+        # state nội bộ mà không crash ở frame kế tiếp.
+        window.render([], {})
+        window.repaint()
 
         window.close()

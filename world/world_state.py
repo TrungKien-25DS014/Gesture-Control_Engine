@@ -41,6 +41,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from core.gesture_event import GestureEvent, GestureType, HandLabel
+from core.touch_state import TouchState
 from core.world_anchor import Vector3, WorldAnchor
 from world.interactions import ActionResult, WorldAction
 
@@ -69,12 +70,33 @@ class WorldState:
             HandLabel.RIGHT: None,
         }
         self._last_action_result: Optional[ActionResult] = None
+        # Giai đoạn F: anchor_id vừa bị PUSH trúng ở lần handle_event() gần
+        # nhất (kể cả khi anchor đó không gắn action nào) - rendering/ đọc
+        # qua pop_pending_push() để phát hiệu ứng "pulse" 1 lần, khác hẳn
+        # last_action_result vốn chỉ có giá trị khi anchor CÓ action gắn
+        # kèm. "Pop" (đọc xong tự xóa) để không phát pulse lặp lại nhiều
+        # frame liên tiếp cho cùng 1 lần push.
+        self._pending_push_anchor_id: Optional[str] = None
 
     # ---- quản lý anchor ----
 
     def add_anchor(self, anchor: WorldAnchor) -> WorldAnchor:
         self._anchors[anchor.id] = anchor
         return anchor
+
+    def spin(self, anchor_id: str, delta_yaw: float) -> None:
+        """Giai đoạn F (tùy chọn) - "thêm 1 object demo xoay 3D thật để
+        nhấn mạnh cảm giác không gian". Xoay quanh trục yaw một lượng
+        `delta_yaw` (radian), do main.py gọi mỗi frame theo thời gian trôi
+        qua (KHÔNG theo gesture) - vẫn hợp lệ world/ là nơi duy nhất sửa
+        WorldAnchor, chỉ khác nguồn kích hoạt là clock thay vì GestureEvent.
+        Không làm gì nếu anchor không tồn tại (đã bị remove_anchor), không
+        raise."""
+        anchor = self._anchors.get(anchor_id)
+        if anchor is None:
+            return
+        pitch, yaw, roll = anchor.rotation
+        self._anchors[anchor_id] = replace(anchor, rotation=(pitch, yaw + delta_yaw, roll))
 
     def remove_anchor(self, anchor_id: str) -> None:
         self._anchors.pop(anchor_id, None)
@@ -104,6 +126,40 @@ class WorldState:
 
     def is_grabbing(self, hand: HandLabel) -> bool:
         return hand in self._grabs
+
+    def pop_pending_push(self) -> Optional[str]:
+        """Giai đoạn F: trả về anchor_id vừa bị PUSH trúng ở handle_event()
+        gần nhất (hoặc None nếu không có / đã đọc rồi), rồi xóa luôn - dùng
+        cho rendering/ phát hiệu ứng pulse 1 lần, không phải trạng thái
+        thường trực nên KHÔNG dùng property như last_action_result."""
+        anchor_id = self._pending_push_anchor_id
+        self._pending_push_anchor_id = None
+        return anchor_id
+
+    def touch_states(self) -> dict[str, TouchState]:
+        """Protocol WorldLogic (Giai đoạn F) - trạng thái chạm/grab hiện tại
+        của từng anchor, tổng hợp từ hit-test của TẤT CẢ các tay. Chỉ trả
+        về entry cho anchor đang TOUCHED hoặc GRABBED (anchor vắng mặt
+        trong dict coi như NONE) - tránh dict rác cho hàng trăm anchor
+        không ai chạm tới trong scene lớn.
+
+        GRABBED được ưu tiên hơn TOUCHED: 1 anchor đang bị tay A grab, dù
+        tay B cũng đang hit-test trúng, vẫn hiển thị là GRABBED (đang bị
+        thao tác) - đúng thứ tự ưu tiên feedback trực quan mô tả ở
+        core/touch_state.py.
+        """
+        grabbed_ids = {grab.anchor_id for grab in self._grabs.values()}
+
+        states: dict[str, TouchState] = {}
+        for touched_id in self._touched.values():
+            if touched_id is None:
+                continue
+            states[touched_id] = TouchState.TOUCHED
+
+        for anchor_id in grabbed_ids:
+            states[anchor_id] = TouchState.GRABBED
+
+        return states
 
     # ---- xử lý event (Protocol WorldLogic) ----
 
@@ -199,6 +255,12 @@ class WorldState:
         anchor = self._anchors.get(touched_id)
         if anchor is None:
             return
+
+        # Giai đoạn F: ghi nhận push TRƯỚC khi biết anchor có action hay
+        # không - feedback trực quan (pulse) nên xảy ra ngay cả với object
+        # trang trí không gắn action, để tay vẫn "cảm" được là push đã
+        # trúng object, không chỉ khi có action thật thực thi.
+        self._pending_push_anchor_id = touched_id
 
         action: Optional[WorldAction] = anchor.metadata.get("action")
         if action is None:

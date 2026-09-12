@@ -164,8 +164,28 @@ class PushPullDetector:
     DELTA_THRESHOLD = 0.18     # biên độ đổi depth tối thiểu trong cả cửa sổ để coi là push/pull thật
     COOLDOWN_FRAMES = 8
 
-    def __init__(self) -> None:
-        self._window: deque[float] = deque(maxlen=self.WINDOW_SIZE)
+    def __init__(
+        self,
+        window_size: Optional[int] = None,
+        delta_threshold: Optional[float] = None,
+        cooldown_frames: Optional[int] = None,
+    ) -> None:
+        """
+        Giai đoạn F - "tinh chỉnh ngưỡng push/pull cho cảm giác tự nhiên" là
+        việc CẦN thử nhiều lần với tay thật (không suy ra được bằng công
+        thức), nên 3 tham số quan trọng nhất mở constructor để calibrate mà
+        không phải sửa trực tiếp source: `delta_threshold` thấp hơn -> push/
+        pull nhạy hơn (dễ trigger, cũng dễ nhận nhầm khi tay run/di chuyển
+        tự nhiên); `cooldown_frames` cao hơn -> chống double-trigger tốt
+        hơn nhưng push/pull liên tiếp nhanh sẽ bị bỏ sót; `window_size` lớn
+        hơn -> lọc noise depth tốt hơn nhưng độ trễ phản hồi cũng tăng.
+        Không truyền gì -> giữ nguyên hằng số mặc định như trước Giai đoạn F.
+        """
+        self._window_size = window_size if window_size is not None else self.WINDOW_SIZE
+        self._delta_threshold = delta_threshold if delta_threshold is not None else self.DELTA_THRESHOLD
+        self._cooldown_frames = cooldown_frames if cooldown_frames is not None else self.COOLDOWN_FRAMES
+
+        self._window: deque[float] = deque(maxlen=self._window_size)
         self._cooldown = 0
 
     def update(self, depth: float) -> Optional[str]:
@@ -176,21 +196,21 @@ class PushPullDetector:
             self._cooldown -= 1
             return None
 
-        if len(self._window) < self.WINDOW_SIZE:
+        if len(self._window) < self._window_size:
             return None
 
         delta = self._window[-1] - self._window[0]  # + = depth tăng (lùi), - = depth giảm (tiến)
 
-        if delta <= -self.DELTA_THRESHOLD:
+        if delta <= -self._delta_threshold:
             self._trigger_cooldown()
             return "push"
-        if delta >= self.DELTA_THRESHOLD:
+        if delta >= self._delta_threshold:
             self._trigger_cooldown()
             return "pull"
         return None
 
     def _trigger_cooldown(self) -> None:
-        self._cooldown = self.COOLDOWN_FRAMES
+        self._cooldown = self._cooldown_frames
         self._window.clear()
 
     def reset(self) -> None:

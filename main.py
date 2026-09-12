@@ -23,8 +23,12 @@ Vòng lặp mỗi frame (QTimer ~30fps):
      ĐÃ phân loại (luôn có 1 trạng thái nắm/xòe + 0..n event rời rạc).
   4. Mỗi event đã phân loại -> world.WorldState.handle_event() - cập nhật
      hit-test/grab-move/push trigger trên danh sách WorldAnchor.
-  5. rendering.OverlayWindow.render(world_state.get_anchors()) - vẽ lại toàn
-     bộ scene theo phối cảnh giả, occlusion đúng theo depth.
+  5. rendering.OverlayWindow.render(anchors, touch_states) - vẽ lại toàn bộ
+     scene theo phối cảnh giả, occlusion đúng theo depth. Giai đoạn F: kèm
+     theo touch_states (world_state.touch_states()) để overlay tự làm mượt
+     animation + vẽ glow feedback (xem rendering/animation.py); nếu vừa có
+     push trúng object (world_state.pop_pending_push()) thì gọi thêm
+     overlay.trigger_pulse() để phát hiệu ứng nảy nhẹ.
 
 Tay biến mất khỏi khung hình đủ lâu -> gọi gesture_engine.reset_hand() để
 rotation/push-pull không tính delta "nhảy" qua khoảng trống lúc tay vắng mặt
@@ -58,6 +62,13 @@ _FRAME_INTERVAL_MS = 33  # ~30 fps
 # Phải khớp HandTracker.reset_after_missing_frames mặc định (vision/hand_tracker.py).
 _RESET_AFTER_MISSING_FRAMES = 10
 
+# Giai đoạn F (tùy chọn) - object demo xoay 3D liên tục, không phụ thuộc
+# gesture, chỉ để "nhấn mạnh cảm giác không gian" theo kế hoạch. Tốc độ tính
+# theo radian/tick khớp _FRAME_INTERVAL_MS (~30fps) -> ~0.5 vòng/giây, đủ
+# chậm để nhìn rõ hiệu ứng "đĩa xoay" (rendering/overlay_window.py), không
+# nhanh tới mức gây rối mắt.
+_SPIN_RADIANS_PER_TICK = 0.10
+
 
 def _demo_anchors() -> list[WorldAnchor]:
     """Vài object demo trôi nổi ở 3 độ sâu khác nhau - đủ để thử phối cảnh
@@ -81,8 +92,11 @@ def _demo_anchors() -> list[WorldAnchor]:
             },
         ),
         WorldAnchor(
+            # Giai đoạn F (tùy chọn): "spin": True -> GesturePipeline._tick
+            # tự xoay anchor này mỗi frame qua world_state.spin(), không
+            # cần tay tương tác gì - xem _SPIN_RADIANS_PER_TICK ở trên.
             position_3d=(0.5, 0.7, 0.85),
-            metadata={"label": "Far", "color": (120, 220, 120)},
+            metadata={"label": "Far", "color": (120, 220, 120), "spin": True},
         ),
     ]
 
@@ -122,6 +136,14 @@ class GesturePipeline:
         if not ok:
             return  # mất frame thoáng qua - không crash, chờ frame kế tiếp
 
+        # Giai đoạn F (tùy chọn): xoay object demo, độc lập với gesture -
+        # chạy mỗi tick đọc được frame camera (nếu mất 1 frame camera thoáng
+        # qua ở early-return phía trên thì spin cũng chậm lại 1 tick tương
+        # ứng, không đáng kể với hiệu ứng chỉ mang tính trang trí).
+        for anchor in self.world_state.get_anchors():
+            if anchor.metadata.get("spin"):
+                self.world_state.spin(anchor.id, _SPIN_RADIANS_PER_TICK)
+
         raw_events = self.hand_tracker.read_frame(frame)
         self._decay_missing_hands({event.hand for event in raw_events})
 
@@ -129,7 +151,14 @@ class GesturePipeline:
             for classified in self.gesture_engine.process(raw_event):
                 self.world_state.handle_event(classified)
 
-        self.overlay.render(self.world_state.get_anchors())
+        # Giai đoạn F: push_anchor_id "1 lần" (pop, không phải property
+        # thường trực) -> phát pulse TRƯỚC khi render() để paintEvent() vẽ
+        # ra ngay frame này, không trễ 1 frame.
+        push_anchor_id = self.world_state.pop_pending_push()
+        if push_anchor_id is not None:
+            self.overlay.trigger_pulse(push_anchor_id)
+
+        self.overlay.render(self.world_state.get_anchors(), self.world_state.touch_states())
 
     def _decay_missing_hands(self, seen: set[HandLabel]) -> None:
         for hand in (HandLabel.LEFT, HandLabel.RIGHT):

@@ -26,6 +26,7 @@ from typing import Optional
 import pytest
 
 from core.gesture_event import GestureEvent, GestureType, HandLabel
+from core.touch_state import TouchState
 from core.world_anchor import WorldAnchor
 from world.interactions import ActionResult, OpenLinkAction, RunScriptAction, ShowInfoAction
 from world.launcher import LaunchAppAction
@@ -406,6 +407,123 @@ def test_end_to_end_grab_then_push_different_anchor() -> None:
 
     assert button_action.call_count == 1
     assert world.get_anchor(button.id).position_3d == (0.8, 0.2, 0.4)  # nút không di chuyển
+
+
+
+# ---------------------------------------------------------------------------
+# Giai đoạn F - Polish tương tác: touch_states() cho glow feedback,
+# pop_pending_push() cho hiệu ứng pulse, spin() cho object demo xoay 3D.
+# ---------------------------------------------------------------------------
+
+
+class TestTouchStates:
+    def test_untouched_anchor_has_no_entry(self) -> None:
+        world = WorldState()
+        world.add_anchor(WorldAnchor(id="a1", position_3d=(0.9, 0.9, 0.9)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.1, 0.1, 0.1), GestureType.HAND_OPEN))
+
+        assert world.touch_states() == {}
+
+    def test_touched_but_not_grabbed_reports_touched(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.HAND_OPEN))
+
+        assert world.touch_states() == {anchor.id: TouchState.TOUCHED}
+
+    def test_grabbed_anchor_reports_grabbed(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PINCH_START))
+
+        assert world.touch_states() == {anchor.id: TouchState.GRABBED}
+
+    def test_grabbed_takes_priority_over_touched_by_other_hand(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PINCH_START))
+        # Tay trái cũng hit-test trúng đúng anchor đang bị tay phải grab.
+        world.handle_event(_event(HandLabel.LEFT, (0.5, 0.5, 0.5), GestureType.HAND_OPEN))
+
+        assert world.touch_states() == {anchor.id: TouchState.GRABBED}
+
+    def test_releasing_grab_without_moving_away_falls_back_to_touched(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PINCH_START))
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PINCH_END))
+
+        assert world.touch_states() == {anchor.id: TouchState.TOUCHED}
+
+
+class TestPendingPush:
+    def test_push_hitting_anchor_sets_pending_push(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PUSH))
+
+        assert world.pop_pending_push() == anchor.id
+
+    def test_pop_pending_push_clears_after_reading(self) -> None:
+        world = WorldState()
+        world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PUSH))
+
+        world.pop_pending_push()
+
+        assert world.pop_pending_push() is None
+
+    def test_push_without_hitting_anything_leaves_pending_push_none(self) -> None:
+        world = WorldState()
+        world.add_anchor(WorldAnchor(position_3d=(0.9, 0.9, 0.9)))
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.1, 0.1, 0.1), GestureType.PUSH))
+
+        assert world.pop_pending_push() is None
+
+    def test_push_on_anchor_without_action_still_sets_pending_push(self) -> None:
+        """Feedback trực quan (pulse) phải xảy ra ngay cả với object trang
+        trí không gắn action - khác với last_action_result vốn chỉ có giá
+        trị khi action thật thực thi."""
+        world = WorldState()
+        decorative = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))  # không metadata["action"]
+
+        world.handle_event(_event(HandLabel.RIGHT, (0.5, 0.5, 0.5), GestureType.PUSH))
+
+        assert world.pop_pending_push() == decorative.id
+        assert world.last_action_result is None
+
+
+class TestSpin:
+    def test_spin_increments_yaw_rotation(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.5, 0.5, 0.5)))
+
+        world.spin(anchor.id, 0.1)
+        world.spin(anchor.id, 0.1)
+
+        _, yaw, _ = world.get_anchor(anchor.id).rotation
+        assert yaw == pytest.approx(0.2)
+
+    def test_spin_does_not_affect_position_or_other_axes(self) -> None:
+        world = WorldState()
+        anchor = world.add_anchor(WorldAnchor(position_3d=(0.3, 0.4, 0.5), rotation=(0.1, 0.0, 0.2)))
+
+        world.spin(anchor.id, 0.5)
+
+        updated = world.get_anchor(anchor.id)
+        assert updated.position_3d == pytest.approx((0.3, 0.4, 0.5))
+        assert updated.rotation == pytest.approx((0.1, 0.5, 0.2))
+
+    def test_spin_on_removed_anchor_does_not_raise(self) -> None:
+        world = WorldState()
+        world.spin("does-not-exist", 0.5)  # không crash
 
 
 if __name__ == "__main__":

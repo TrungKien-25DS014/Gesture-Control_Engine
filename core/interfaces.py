@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from core.gesture_event import GestureEvent
+from core.touch_state import TouchState
 from core.world_anchor import WorldAnchor
 
 
@@ -55,13 +56,27 @@ class GestureEngine(Protocol):
 
 
 class WorldLogic(Protocol):
-    """world/: nhận GestureEvent, cập nhật danh sách WorldAnchor."""
+    """world/: nhận GestureEvent, cập nhật danh sách WorldAnchor.
+
+    Cập nhật Giai đoạn F: thêm touch_states() - world/ là nơi DUY NHẤT biết
+    tay nào đang chạm/grab anchor nào (qua hit-test 3D đã có sẵn từ Giai
+    đoạn D), nên feedback trực quan "glow khi depth tay khớp object" phải
+    đọc từ đây, không phải rendering/ tự đoán lại hit-test lần 2 (tránh 2
+    nơi tính cùng 1 logic, dễ lệch nhau). rendering/ (Giai đoạn E/F) chỉ đọc
+    kết quả, không tự tính - đúng ranh giới 4 lớp xuyên suốt dự án.
+    """
 
     def handle_event(self, event: GestureEvent) -> None: ...
     def get_anchors(self) -> list[WorldAnchor]: ...
+    def touch_states(self) -> dict[str, TouchState]: ...
 
 
 class Renderer(Protocol):
-    """rendering/: nhận danh sách WorldAnchor, vẽ lên màn hình."""
+    """rendering/: nhận danh sách WorldAnchor, vẽ lên màn hình.
 
-    def render(self, anchors: list[WorldAnchor]) -> None: ...
+    Cập nhật Giai đoạn F: touch_states mặc định {} (dict rỗng = không object
+    nào touched/grabbed) để renderer cũ (nếu có) không bắt buộc phải đổi
+    chữ ký ngay - phù hợp nguyên tắc "port sang AR chỉ đổi rendering/".
+    """
+
+    def render(self, anchors: list[WorldAnchor], touch_states: dict[str, TouchState] = ...) -> None: ...
